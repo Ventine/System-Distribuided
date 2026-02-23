@@ -8,6 +8,9 @@ import org.springframework.web.bind.annotation.*;
 import com.CAP.CAP.service.*;
 import com.CAP.CAP.exception.*;
 
+import java.time.Instant;
+import java.util.Map;
+
 @Slf4j
 @RestController
 @RequestMapping("/api/v1/storage")
@@ -19,18 +22,40 @@ public class StorageController {
         this.storageService = storageService;
     }
 
-    // DTOs embebidos para simplicidad visual
+    // DTOs embebidos
     public record WriteRequest(@NotBlank String key, @NotBlank String value, boolean strongConsistency) {}
-    public record DataResponse(String key, String value, String consistencyModel) {}
+    
+    // Mejoramos el DTO de respuesta de lectura para incluir metadatos de la operación
+    public record DataResponse(
+        String key, 
+        String value, 
+        String consistencyModel, 
+        String timestamp,
+        String architecturalDetails
+    ) {}
 
     @PostMapping
-    public ResponseEntity<String> writeData(@Valid @RequestBody WriteRequest request) {
+    public ResponseEntity<Map<String, Object>> writeData(@Valid @RequestBody WriteRequest request) {
         if (request.strongConsistency()) {
             storageService.writeStrong(request.key(), request.value());
-            return ResponseEntity.ok("Write SUCCESS (Strong Consistency). Quorum reached.");
+            // Respuesta detallada para Consistencia Fuerte
+            return ResponseEntity.ok(Map.of(
+                "status", "ÉXITO",
+                "consistency", "FUERTE (Síncrona)",
+                "message", "El dato fue escrito en el nodo local y replicado exitosamente a todos los nodos.",
+                "details", "Se alcanzó el quórum requerido (W=3). Si un nodo cae ahora, no hay pérdida de datos.",
+                "timestamp", Instant.now()
+            ));
         } else {
             storageService.writeEventual(request.key(), request.value());
-            return ResponseEntity.accepted().body("Write ACCEPTED (Eventual Consistency). Replicating in background.");
+            // Respuesta detallada para Consistencia Eventual
+            return ResponseEntity.accepted().body(Map.of(
+                "status", "ACEPTADO",
+                "consistency", "EVENTUAL (Asíncrona)",
+                "message", "El dato fue guardado rápidamente en el nodo local.",
+                "details", "La replicación hacia los nodos secundarios se está ejecutando en segundo plano para garantizar baja latencia en la respuesta.",
+                "timestamp", Instant.now()
+            ));
         }
     }
 
@@ -41,22 +66,45 @@ public class StorageController {
         
         String value;
         String model;
+        String details;
+
         if (strongConsistency) {
             value = storageService.readStrong(key);
-            model = "STRONG";
+            model = "CONSISTENCIA FUERTE";
+            details = "Lectura verificada contra todos los nodos del clúster (R=3). Se garantiza que el valor devuelto es la última versión absoluta.";
         } else {
             value = storageService.readEventual(key);
-            model = "EVENTUAL";
+            model = "CONSISTENCIA EVENTUAL";
+            details = "Lectura rápida servida únicamente desde el nodo local (R=1). Advertencia: Podría devolver un valor desactualizado si existen replicaciones pendientes en la red.";
         }
         
-        return ResponseEntity.ok(new DataResponse(key, value, model));
+        return ResponseEntity.ok(new DataResponse(
+            key, 
+            value, 
+            model, 
+            Instant.now().toString(),
+            details
+        ));
     }
 
     // --- ENDPOINTS DE CAOS (SIMULACIÓN DE FALLOS) ---
     
     @PostMapping("/fault/partition/{status}")
-    public ResponseEntity<String> togglePartition(@PathVariable boolean status) {
+    public ResponseEntity<Map<String, String>> togglePartition(@PathVariable boolean status) {
         storageService.toggleNetworkPartition(status);
-        return ResponseEntity.ok("Network partition simulated: " + status);
+        
+        String estadoActual = status 
+            ? "ACTIVADA (Nodos aislados, clúster degradado)" 
+            : "DESACTIVADA (Red normalizada, clúster saludable)";
+            
+        String impacto = status 
+            ? "Las operaciones que exijan Consistencia Fuerte fallarán. Las operaciones con Consistencia Eventual seguirán funcionando (Alta Disponibilidad)." 
+            : "Todas las operaciones de lectura y escritura operan con normalidad en todo el clúster.";
+        
+        return ResponseEntity.ok(Map.of(
+            "action", "Simulación de Partición de Red (Teorema CAP)",
+            "networkStatus", estadoActual,
+            "architecturalImpact", impacto
+        ));
     }
 }
